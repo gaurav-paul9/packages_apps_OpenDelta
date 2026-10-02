@@ -928,6 +928,7 @@ public class UpdateService extends Service implements OnSharedPreferenceChangeLi
         final String latestSUM = getLatestSHA256Sum(url);
         final File file = new File(fn);
         if (latestSUM != null){
+            if (latestSUM.equals("")) return true;
             try {
                 String fileSUM = getFileSHA256(file,
                         getSUMProgress(State.ACTION_CHECKING_SUM, file.getName()));
@@ -1358,15 +1359,25 @@ public class UpdateService extends Service implements OnSharedPreferenceChangeLi
         if (mIsUrlOverride) {
             sumUrl = mSumUrlOvr;
         }
+        if (sumUrl == null || sumUrl.isEmpty()) {
+            return "";
+        }
+        if (!sumUrl.startsWith("http://") && !sumUrl.startsWith("https://")) {
+            return sumUrl;
+        }
         String latestSum = Download.asString(sumUrl);
         if (latestSum != null) {
-            String sumPart = latestSum;
+            String sumPart = latestSum.trim();
+            if (sumPart.contains(" ")) {
+                sumPart = sumPart.split("\\s+")[0];
+            }
             while (sumPart.length() > 64)
                 sumPart = sumPart.substring(0, sumPart.length() - 1);
             Logger.d("getLatestSHA256Sum - sha256sum = " + sumPart);
             return sumPart;
         }
-        return null;
+        Logger.d("getLatestSHA256Sum - sum file not found on server, skipping sha check");
+        return "";
     }
 
     private static float getProgress(long current, long total) {
@@ -1502,6 +1513,10 @@ public class UpdateService extends Service implements OnSharedPreferenceChangeLi
                                 urlOverride = build.getString("url");
                             if (build.has("sha256url"))
                                 sumOverride = build.getString("sha256url");
+                            else if (build.has("sha256"))
+                                sumOverride = build.getString("sha256");
+                            else if (build.has("id"))
+                                sumOverride = build.getString("id");
                             if (build.has("datetime"))
                                 buildDateTime = build.getLong("datetime");
                             if (build.has("payload")) {
@@ -1776,27 +1791,30 @@ public class UpdateService extends Service implements OnSharedPreferenceChangeLi
         File fn = new File(flashFilename);
         if (!forceFlash) {
             File shaFile = new File(flashFilename + ".sha256sum");
-            if (!shaFile.exists()) {
-                mState.update(State.ACTION_FLASH_FILE_NO_SUM, fn.getName());
-                return;
-            }
-            // verify sha with local file
-            String sha;
-            try (BufferedReader br = new BufferedReader(new FileReader(shaFile))) {
-                sha = br.readLine();
-                while (sha.length() > 64)
-                    sha = sha.substring(0, sha.length() - 1);
-            } catch (Exception e) {
-                Logger.ex(e);
-                mState.update(State.ACTION_FLASH_FILE_INVALID_SUM, fn.getName());
-                return;
-            }
-            final ProgressListener listener = getSUMProgress(
-                    State.ACTION_CHECKING_SUM, flashFilename);
-            final String fileSha = getFileSHA256(fn, listener);
-            if (fileSha == null || sha == null || !fileSha.equals(sha)) {
-                mState.update(State.ACTION_FLASH_FILE_INVALID_SUM, fn.getName());
-                return;
+            if (shaFile.exists()) {
+                // verify sha with local file
+                String sha;
+                try (BufferedReader br = new BufferedReader(new FileReader(shaFile))) {
+                    sha = br.readLine();
+                    if (sha != null && sha.contains(" ")) {
+                        sha = sha.split("\\s+")[0];
+                    }
+                    while (sha != null && sha.length() > 64)
+                        sha = sha.substring(0, sha.length() - 1);
+                } catch (Exception e) {
+                    Logger.ex(e);
+                    mState.update(State.ACTION_FLASH_FILE_INVALID_SUM, fn.getName());
+                    return;
+                }
+                final ProgressListener listener = getSUMProgress(
+                        State.ACTION_CHECKING_SUM, flashFilename);
+                final String fileSha = getFileSHA256(fn, listener);
+                if (fileSha == null || sha == null || !fileSha.equals(sha)) {
+                    mState.update(State.ACTION_FLASH_FILE_INVALID_SUM, fn.getName());
+                    return;
+                }
+            } else {
+                Logger.d("maybeFlashFile - no local .sha256sum file, skipping sum check");
             }
         }
         Logger.d("Set flash possible: %s", flashFilename);
